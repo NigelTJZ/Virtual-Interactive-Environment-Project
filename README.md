@@ -3,18 +3,18 @@ For LTU VIE module project Spring 2026
 
 Template:
 
-Project name: SuperEngine3D (Feel free to change)
+Project name: SuperEngine3D
 Team members: Nigel & Joseph
 Repository link: https://github.com/NigelTJZ/VIE-Project#
 
 1. Engine vision
-We are building an engine tailored for precise, frame-perfect 3D kinematic platforming. Instead of realistic rigid-body physics, the engine prioritizes deterministic, arcade-style movement mechanics (snappy jumps, momentum-based running) combined with efficient entity management.
+We are building an engine tailored for precise, frame perfect 3D kinematic platforming. Instead of realistic rigid-body physics, the engine prioritizes deterministic, arcade-style movement mechanics (snappy jumps, momentum-based running) combined with efficient entity management.
 
 2. Target genre/VIE
-The engine is optimized for 3D platformers and obstacle-course environments that require high-precision character control and responsive collision detection against complex static geometry.
+The engine is optimized for 3D platformers and obstacle course environments that require high precision character control and responsive collision detection against complex static geometry.
 
 3. Core scenario
-The first playable technical scenario is a 3D sandbox environment where a player-controlled capsule can run, jump with variable height (based on input duration), and collide with static terrain. The scene will also feature multiple autonomous agents (e.g., simple patrol enemies) that the player can interact with (e.g., bouncing off their heads).
+The first playable technical scenario is a 3D sandbox environment where a player controlled capsule can run, jump with variable height (based on input duration), and collide with static terrain. The scene will also feature multiple autonomous agents (e.g. simple patrol enemies) that the player can interact with (e.g. bouncing off their heads).
 
 4. Reusable engine features
 
@@ -22,7 +22,7 @@ Custom Kinematic Character Controller (handling gravity, acceleration, and AABB/
 
 Entity Component System (ECS) or Scene Graph for dynamic, configurable object management.
 
-Spatial partitioning system (e.g., Grid-based spatial hashing) to optimize collision checks and ensure the < 16.67ms update loop.
+Spatial partitioning system (e.g., Grid based spatial hashing) to optimize collision checks and ensure the < 16.67ms update loop.
 
 5. Game-specific features
 
@@ -30,7 +30,7 @@ Spatial partitioning system (e.g., Grid-based spatial hashing) to optimize colli
 
 Basic autonomous patrol AI for enemy entities.
 
-Interactive dynamic objects (e.g., collectable coins or breakable blocks).
+Interactive dynamic objects (e.g. collectable coins or breakable blocks).
 
 6. Non-goals for milestone 1
 
