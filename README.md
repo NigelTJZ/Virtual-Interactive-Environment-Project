@@ -5,7 +5,6 @@ Template:
 
 Project name: SuperEngine3D
 Team members: Nigel & Joseph
-Repository link: https://github.com/NigelTJZ/VIE-Project#
 
 1. Engine vision
 We are building an engine tailored for precise, frame perfect 3D kinematic platforming. Instead of realistic rigid-body physics, the engine prioritizes deterministic, arcade-style movement mechanics (snappy jumps, momentum-based running) combined with efficient entity management.
@@ -49,7 +48,7 @@ Configurable physics parameters (gravity multiplier, max run speed, jump impulse
 Entity spawn coordinates and counts.
 
 8. Chosen libraries and tools
-Note: I've suggested bgfx here as it's lightweight and excellent for custom C++ engines, but you can swap it for Ogre3D if you prefer a heavier framework.
+Either BGFX (lightweight for custom C++ engine), or Ogre3D for heavier framework.
 
 3D: bgfx (Cross-platform, low-overhead rendering).
 
