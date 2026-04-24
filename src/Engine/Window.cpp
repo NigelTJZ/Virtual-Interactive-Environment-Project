@@ -15,6 +15,9 @@ Window::Window(int width, int height, const std::string& title) {
         std::cerr << "Failed to create GLFW window!" << std::endl;
         glfwTerminate();
     }
+    
+    // This connects OpenGL to this specific window so it knows where to draw!
+    glfwMakeContextCurrent(m_window);
 }
 
 Window::~Window() {

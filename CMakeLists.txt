@@ -1,35 +1,33 @@
 # Require a modern version of CMake
 cmake_minimum_required(VERSION 3.15)
-
-# Name your project
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 project(VIE-Project)
-
-# Tell CMake we are using modern C++
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# --- NEW: Fetch GLFW automatically ---
 include(FetchContent)
-FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.3.8
-)
-# Turn off extra GLFW stuff we don't need to speed up compile time
+
+# --- GLFW (Window & Input) ---
+FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.3.8)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(glfw)
-# ---------------------------------------
 
-# Tell CMake where to look for our .h header files
+# --- Bullet Physics (Collisions & Gravity) ---
+FetchContent_Declare(bullet GIT_REPOSITORY https://github.com/bulletphysics/bullet3.git GIT_TAG 3.25)
+set(BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_CPU_DEMOS OFF CACHE BOOL "" FORCE)
+set(BUILD_BULLET2_DEMOS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(bullet)
+
+# --- NEW: Find the built-in OpenGL library on your computer ---
+find_package(OpenGL REQUIRED)
+
 include_directories(include)
 
-# Add BOTH of our .cpp files to the executable
-add_executable(VIE-Project 
-    src/main.cpp 
-    src/Engine/Window.cpp
-)
+add_executable(VIE-Project src/main.cpp src/Engine/Window.cpp)
 
-# Tell CMake to link the GLFW library to our executable
-target_link_libraries(VIE-Project PRIVATE glfw)
+# --- NEW: Link OpenGL::GL to our project ---
+target_link_libraries(VIE-Project PRIVATE glfw BulletDynamics BulletCollision LinearMath OpenGL::GL)
