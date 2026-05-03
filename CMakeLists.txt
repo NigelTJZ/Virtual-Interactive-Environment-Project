@@ -5,6 +5,10 @@ project(VIE-Project)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+if(APPLE)
+    add_compile_definitions(GL_SILENCE_DEPRECATION)
+endif()
+
 include(FetchContent)
 
 # --- GLFW (Window & Input) ---
@@ -22,12 +26,20 @@ set(BUILD_BULLET2_DEMOS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(bullet)
 
-# --- NEW: Find the built-in OpenGL library on your computer ---
 find_package(OpenGL REQUIRED)
 
-include_directories(include)
+include_directories(include include/imgui)
 
-add_executable(VIE-Project src/main.cpp src/Engine/Window.cpp)
+add_executable(VIE-Project 
+    src/main.cpp 
+    src/Engine/Window.cpp
+    src/Engine/SpatialGrid.cpp  # <-- NEW: Added to compilation
+    include/imgui/imgui.cpp
+    include/imgui/imgui_draw.cpp
+    include/imgui/imgui_tables.cpp
+    include/imgui/imgui_widgets.cpp
+    include/imgui/imgui_impl_glfw.cpp
+    include/imgui/imgui_impl_opengl3.cpp
+)
 
-# --- NEW: Link OpenGL::GL to our project ---
 target_link_libraries(VIE-Project PRIVATE glfw BulletDynamics BulletCollision LinearMath OpenGL::GL)

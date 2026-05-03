@@ -12,6 +12,10 @@ public:
     // Destructor: Called when the window is destroyed
     ~Window();
 
+    // ---> ADD THIS LINE RIGHT HERE <---
+    // This allows main.cpp to give ImGui the window pointer it needs
+    GLFWwindow* getRawWindow() { return m_window; }
+
     // Core loop functions
     bool shouldClose();
     void pollEvents();
