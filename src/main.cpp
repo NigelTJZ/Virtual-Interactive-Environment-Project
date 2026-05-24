@@ -17,7 +17,7 @@
 enum GameState { MAIN_MENU, PLAYING, PAUSED, STAGE_COMPLETED };
 enum EngineMode { EDIT_MODE, PLAY_MODE };
 
-enum AssetType { ASSET_BLOCK, ASSET_ROCK, ASSET_HILL, ASSET_TREE, ASSET_TRAP };
+enum AssetType { ASSET_BLOCK, ASSET_ROCK, ASSET_HILL, ASSET_TREE, ASSET_TRAP, ASSET_GOAL };
 
 struct EnvironmentBlock {
     AssetType type;
@@ -31,7 +31,7 @@ struct EnemySnapshot {
     float spawnX, spawnZ;
 };
 
-enum EventType { EVENT_SPAWN_ENEMY, EVENT_SPAWN_ASSET, EVENT_CLEAR_BLOCKS, EVENT_PURGE_ENEMIES, EVENT_PLAYER_DAMAGE };
+enum EventType { EVENT_SPAWN_ENEMY, EVENT_SPAWN_ASSET, EVENT_CLEAR_BLOCKS, EVENT_PURGE_ENEMIES, EVENT_PLAYER_DAMAGE, EVENT_DESTROY_BLOCK };
 
 struct EngineEvent {
     EventType type;
@@ -40,6 +40,7 @@ struct EngineEvent {
     float paramY = 0.0f;
     float paramZ = 0.0f;
     int paramValue = 0;
+    int targetBlockIndex = -1; // Index targeting item blocks for head-bonk purges
 };
 
 // --- HIGH PERFORMANCE PROCEDURAL NOISE SYSTEM ---
@@ -109,7 +110,13 @@ void DrawPlatform() {
 }
 
 void DrawCustomAsset(const EnvironmentBlock& block) {
-    if (block.type == ASSET_BLOCK || block.type == ASSET_ROCK) {
+    if (block.type == ASSET_BLOCK) {
+        glPushMatrix(); glTranslatef(block.x, block.y, block.z); glScalef(block.scaleX, block.scaleY, block.scaleZ);
+        // Breakable question/item blocks use bright golden texture profiles
+        DrawProceduralCube(0.88f, 0.55f, 0.12f, 0.0f);
+        glPopMatrix();
+    }
+    else if (block.type == ASSET_ROCK) {
         glPushMatrix(); glTranslatef(block.x, block.y, block.z); glScalef(block.scaleX, block.scaleY, block.scaleZ); DrawProceduralCube(0.42f, 0.44f, 0.46f, 1.2f); glPopMatrix();
     } 
     else if (block.type == ASSET_HILL) {
@@ -133,6 +140,10 @@ void DrawCustomAsset(const EnvironmentBlock& block) {
             }
         }
     }
+    else if (block.type == ASSET_GOAL) {
+        glPushMatrix(); glTranslatef(block.x, block.y + 2.0f, block.z); glScalef(0.15f, 4.0f, 0.15f); DrawProceduralCube(0.85f, 0.65f, 0.15f, 0.0f); glPopMatrix();
+        glPushMatrix(); glTranslatef(block.x + 0.45f, block.y + 3.6f, block.z); glScalef(0.8f, 0.5f, 0.1f); DrawProceduralCube(0.9f, 0.9f, 0.9f, 0.0f); glPopMatrix();
+    }
 }
 
 void DrawShadow(float radius) {
@@ -141,7 +152,9 @@ void DrawShadow(float radius) {
     glDepthMask(GL_TRUE); glDisable(GL_BLEND); glEnable(GL_LIGHTING);
 }
 
-void Resolve3DCollision(float& posX, float& posY, float& posZ, float& velY, bool& grounded, const EnvironmentBlock& block, float extX, float extY, float extZ) {
+// --- UPGRADED PHYSICS SOLVER WITH HEAD-BONK EVENT DETECTORS ---
+void Resolve3DCollision(float& posX, float& posY, float& posZ, float& velY, bool& grounded, const EnvironmentBlock& block, float extX, float extY, float extZ, int blockIdx, std::vector<EngineEvent>& eventQueue, EngineMode currentMode) {
+    if (block.type == ASSET_GOAL) return; 
     int iterations = (block.type == ASSET_HILL) ? 3 : 1;
 
     for (int i = 0; i < iterations; ++i) {
@@ -162,6 +175,14 @@ void Resolve3DCollision(float& posX, float& posY, float& posZ, float& velY, bool
             float overlapX = (posX > bX) ? (blockMaxX - entMinX) : (entMaxX - blockMinX);
             float overlapZ = (posZ > bZ) ? (blockMaxZ - entMinZ) : (entMaxZ - blockMinZ);
             float overlapY = blockMaxY - entMinY;
+
+            // --- INTERACTIVE HEAD-BONK DETECTOR PILLAR ---
+            float bottomCeilingDiff = std::abs(entMaxY - blockMinY);
+            if (block.type == ASSET_BLOCK && bottomCeilingDiff < 0.25f && velY > 0.0f && currentMode == PLAY_MODE) {
+                velY = -2.0f; // Bounce downward instantly
+                eventQueue.push_back({ EVENT_DESTROY_BLOCK, ASSET_BLOCK, 0, 0, 0, 0, blockIdx });
+                return;
+            }
 
             float stepDiff = blockMaxY - (posY - extY);
             if (block.climbable && stepDiff > 0.0f && stepDiff <= 0.45f) {
@@ -202,6 +223,8 @@ int main() {
     Entity mario = ecs.createEntity(); std::vector<Entity> enemyList;
     GameState currentState = MAIN_MENU; EngineMode currentMode = EDIT_MODE; float damageCooldown = 0.0f; 
 
+    Transform& marioTransform = ecs.getTransform(mario); PhysicsBody& marioPhysics = ecs.getPhysicsBody(mario);
+
     glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_COLOR_MATERIAL); glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
     GLfloat light_position[] = { 10.0f, 50.0f, 20.0f, 1.0f }; GLfloat light_ambient[] = { 0.4f, 0.4f, 0.4f, 1.0f }; GLfloat light_diffuse[] = { 0.8f, 0.8f, 0.8f, 1.0f }; 
     glLightfv(GL_LIGHT0, GL_POSITION, light_position); glLightfv(GL_LIGHT0, GL_AMBIENT, light_ambient); glLightfv(GL_LIGHT0, GL_DIFFUSE, light_diffuse);
@@ -212,6 +235,18 @@ int main() {
             t.x = (rand() % 80) - 40.0f; t.z = (rand() % 80) - 40.0f; t.y = 0.5f; 
             if (std::abs(t.x) < 10.0f && std::abs(t.z) < 10.0f) { t.x += 15.0f; } 
             ai.spawnX = t.x; ai.spawnZ = t.z; ai.isAlive = true; enemyList.push_back(e);
+        }
+    };
+
+    auto resetToEditorState = [&]() {
+        currentMode = EDIT_MODE; worldBlocks = backupWorldBlocks;
+        marioTransform.x = backupPlayerX; marioTransform.y = backupPlayerY; marioTransform.z = backupPlayerZ;
+        marioPhysics.velocityX = 0.0f; marioPhysics.velocityY = 0.0f; marioPhysics.velocityZ = 0.0f;
+        playerHealth = playerMaxHealth;
+        for (Entity e : enemyList) { ecs.getEnemyAI(e).isAlive = false; } enemyList.clear();
+        for (const auto& sn : backupEnemyList) {
+            Entity e = ecs.createEntity(); Transform& t = ecs.getTransform(e); EnemyAI& ai = ecs.getEnemyAI(e);
+            t.x = sn.spawnX; t.z = sn.spawnZ; t.y = 0.5f; ai.isAlive = true; enemyList.push_back(e);
         }
     };
 
@@ -228,8 +263,6 @@ int main() {
     while (!myWindow.shouldClose()) {
         float currentTime = myWindow.getTime(); float deltaTime = currentTime - lastTime; lastTime = currentTime;
         myWindow.pollEvents();
-        
-        Transform& marioTransform = ecs.getTransform(mario); PhysicsBody& marioPhysics = ecs.getPhysicsBody(mario);
 
         static bool escPressedLastFrame = false; bool escPressedThisFrame = myWindow.isKeyPressed(GLFW_KEY_ESCAPE);
         if (escPressedThisFrame && !escPressedLastFrame) { if (currentState == PLAYING) currentState = PAUSED; else if (currentState == PAUSED) currentState = PLAYING; }
@@ -237,44 +270,54 @@ int main() {
 
         ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
 
-        if (currentState == PLAYING) {
+        if (currentState == PLAYING || currentState == STAGE_COMPLETED) {
             spatialGrid.clear();
             if (enableSpatialGrid) {
                 for (Entity e : enemyList) { if (ecs.getEnemyAI(e).isAlive) spatialGrid.insert(e, ecs.getTransform(e).x, ecs.getTransform(e).z); }
             }
 
-            // --- UNIVERSAL PLAYER MOVEMENT TRACKING LOOP ---
-            marioPhysics.velocityX = 0.0f; marioPhysics.velocityZ = 0.0f; 
-            if (myWindow.isKeyPressed(GLFW_KEY_D)) { marioPhysics.velocityX = playerMovementSpeed; marioTransform.rotationY = 90.0f; }
-            if (myWindow.isKeyPressed(GLFW_KEY_A)) { marioPhysics.velocityX = -playerMovementSpeed; marioTransform.rotationY = -90.0f; }
-            if (myWindow.isKeyPressed(GLFW_KEY_S)) { marioPhysics.velocityZ = playerMovementSpeed; marioTransform.rotationY = 0.0f; }
-            if (myWindow.isKeyPressed(GLFW_KEY_W)) { marioPhysics.velocityZ = -playerMovementSpeed; marioTransform.rotationY = 180.0f; }
-            
-            marioTransform.x += marioPhysics.velocityX * deltaTime; marioTransform.z += marioPhysics.velocityZ * deltaTime;
+            // --- UNCONDITIONAL GRAVITY RUNTIME CORE ---
+            // Fixed jumping availability constraints inside editor screens
+            if (currentState == PLAYING) {
+                marioPhysics.velocityX = 0.0f; marioPhysics.velocityZ = 0.0f; 
+                if (myWindow.isKeyPressed(GLFW_KEY_D)) { marioPhysics.velocityX = playerMovementSpeed; marioTransform.rotationY = 90.0f; }
+                if (myWindow.isKeyPressed(GLFW_KEY_A)) { marioPhysics.velocityX = -playerMovementSpeed; marioTransform.rotationY = -90.0f; }
+                if (myWindow.isKeyPressed(GLFW_KEY_S)) { marioPhysics.velocityZ = playerMovementSpeed; marioTransform.rotationY = 0.0f; }
+                if (myWindow.isKeyPressed(GLFW_KEY_W)) { marioPhysics.velocityZ = -playerMovementSpeed; marioTransform.rotationY = 180.0f; }
+                
+                marioTransform.x += marioPhysics.velocityX * deltaTime; marioTransform.z += marioPhysics.velocityZ * deltaTime;
 
-            // --- GLOBAL VERTICAL PHYSICS & GRAVITY TRACKING ---
-            // Enabled globally across all runtime modes to allow jump testing in editor canvas spaces
-            if (marioPhysics.velocityY > 0 && !myWindow.isKeyPressed(GLFW_KEY_SPACE)) marioPhysics.velocityY -= 50.0f * deltaTime; 
-            else marioPhysics.velocityY -= 20.0f * deltaTime; 
-            marioTransform.y += marioPhysics.velocityY * deltaTime;
+                if (marioPhysics.velocityY > 0 && !myWindow.isKeyPressed(GLFW_KEY_SPACE)) marioPhysics.velocityY -= 50.0f * deltaTime; 
+                else marioPhysics.velocityY -= 20.0f * deltaTime; 
+                marioTransform.y += marioPhysics.velocityY * deltaTime;
 
-            marioPhysics.isGrounded = false;
-            if (marioTransform.y <= 0.5f) { marioTransform.y = 0.5f; marioPhysics.velocityY = 0.0f; marioPhysics.isGrounded = true; }
+                marioPhysics.isGrounded = false;
+                if (marioTransform.y <= 0.5f) { marioTransform.y = 0.5f; marioPhysics.velocityY = 0.0f; marioPhysics.isGrounded = true; }
 
-            for (const auto& block : worldBlocks) {
-                Resolve3DCollision(marioTransform.x, marioTransform.y, marioTransform.z, marioPhysics.velocityY, marioPhysics.isGrounded, block, 0.35f, 0.45f, 0.35f);
-                if (currentMode == PLAY_MODE && block.type == ASSET_TRAP && std::abs(marioTransform.x - block.x) < 1.4f && std::abs(marioTransform.z - block.z) < 1.4f) {
-                    if (damageCooldown <= 0.0f && !isPlayerInvulnerable) eventQueue.push_back({ EVENT_PLAYER_DAMAGE });
+                for (int bIdx = 0; bIdx < worldBlocks.size(); ++bIdx) {
+                    Resolve3DCollision(marioTransform.x, marioTransform.y, marioTransform.z, marioPhysics.velocityY, marioPhysics.isGrounded, worldBlocks[bIdx], 0.35f, 0.45f, 0.35f, bIdx, eventQueue, currentMode);
+                    if (currentMode == PLAY_MODE && worldBlocks[bIdx].type == ASSET_TRAP && std::abs(marioTransform.x - worldBlocks[bIdx].x) < 1.4f && std::abs(marioTransform.z - worldBlocks[bIdx].z) < 1.4f) {
+                        if (damageCooldown <= 0.0f && !isPlayerInvulnerable) eventQueue.push_back({ EVENT_PLAYER_DAMAGE });
+                    }
+                    
+                    if (currentMode == PLAY_MODE && worldBlocks[bIdx].type == ASSET_GOAL) {
+                        float gdx = marioTransform.x - worldBlocks[bIdx].x; float gdz = marioTransform.z - worldBlocks[bIdx].z;
+                        if (std::abs(gdx) < 1.2f && std::abs(gdz) < 1.2f) {
+                            currentState = STAGE_COMPLETED; 
+                        }
+                    }
                 }
+
+                if (marioTransform.x < -99.5f) marioTransform.x = -99.5f; if (marioTransform.z < -99.5f) marioTransform.z = -99.5f;
+
+                if (currentMode == PLAY_MODE && marioTransform.y < -6.0f) {
+                    resetToEditorState();
+                }
+
+                if (myWindow.isKeyPressed(GLFW_KEY_SPACE) && marioPhysics.isGrounded) { marioPhysics.velocityY = 12.0f; marioPhysics.isGrounded = false; }
             }
 
-            if (marioTransform.x < -99.5f) marioTransform.x = -99.5f; if (marioTransform.x >  99.5f) marioTransform.x =  99.5f;
-            if (marioTransform.z < -99.5f) marioTransform.z = -99.5f; if (marioTransform.z >  99.5f) marioTransform.z =  99.5f;
-
-            if (myWindow.isKeyPressed(GLFW_KEY_SPACE) && marioPhysics.isGrounded) { marioPhysics.velocityY = 12.0f; marioPhysics.isGrounded = false; }
-
-            // --- SIMULATION MODE SUB-SYSTEM LOOP ---
-            if (currentMode == PLAY_MODE) {
+            if (currentMode == PLAY_MODE && currentState == PLAYING) {
                 if (damageCooldown > 0.0f) damageCooldown -= deltaTime;
 
                 for (Entity e : enemyList) {
@@ -302,9 +345,9 @@ int main() {
                     enemyPhysics.isGrounded = false;
                     if (enemyTransform.y <= 0.5f) { enemyTransform.y = 0.5f; enemyPhysics.velocityY = 0.0f; enemyPhysics.isGrounded = true; }
 
-                    for (const auto& block : worldBlocks) {
+                    for (int bIdx = 0; bIdx < worldBlocks.size(); ++bIdx) {
                         bool enemyGroundedTemp = enemyPhysics.isGrounded;
-                        Resolve3DCollision(enemyTransform.x, enemyTransform.y, enemyTransform.z, enemyPhysics.velocityY, enemyGroundedTemp, block, 0.4f, 0.3f, 0.4f);
+                        Resolve3DCollision(enemyTransform.x, enemyTransform.y, enemyTransform.z, enemyPhysics.velocityY, enemyGroundedTemp, worldBlocks[bIdx], 0.4f, 0.3f, 0.4f, bIdx, eventQueue, currentMode);
                         if (enemyGroundedTemp) enemyPhysics.isGrounded = true;
                     }
 
@@ -335,15 +378,7 @@ int main() {
                 }
                 
                 if (playerHealth <= 0) {
-                    currentMode = EDIT_MODE; worldBlocks = backupWorldBlocks;
-                    marioTransform.x = backupPlayerX; marioTransform.y = backupPlayerY; marioTransform.z = backupPlayerZ;
-                    marioPhysics.velocityX = 0.0f; marioPhysics.velocityY = 0.0f; marioPhysics.velocityZ = 0.0f;
-                    playerHealth = playerMaxHealth;
-                    for (Entity e : enemyList) { ecs.getEnemyAI(e).isAlive = false; } enemyList.clear();
-                    for (const auto& sn : backupEnemyList) {
-                        Entity e = ecs.createEntity(); Transform& t = ecs.getTransform(e); EnemyAI& ai = ecs.getEnemyAI(e);
-                        t.x = sn.spawnX; t.z = sn.spawnZ; t.y = 0.5f; ai.isAlive = true; enemyList.push_back(e);
-                    }
+                    resetToEditorState();
                 }
             }
         }
@@ -369,6 +404,18 @@ int main() {
             ImGui::End();
         }
 
+        if (currentState == STAGE_COMPLETED) {
+            ImGui::SetNextWindowPos(ImVec2(1440.0f / 2.0f, 900.0f / 2.0f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::Begin("Victory Context Frame", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+            ImGui::SetWindowFontScale(2.5f); ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "VICTORY! STAGE COMPLETED"); ImGui::SetWindowFontScale(1.2f);
+            ImGui::Dummy(ImVec2(0.0f, 15.0f));
+            if (ImGui::Button("Return to Environment Editor", ImVec2(-1, 50))) {
+                currentState = PLAYING;
+                resetToEditorState();
+            }
+            ImGui::End();
+        }
+
         if (currentState == PLAYING || currentState == PAUSED) {
             ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_Always);
             ImGui::Begin("StatusOverlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
@@ -381,17 +428,8 @@ int main() {
                 ImGui::SetNextWindowPos(ImVec2(20.0f, 80.0f), ImGuiCond_Always);
                 ImGui::Begin("Playtest Status Context", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
                 ImGui::SetWindowFontScale(1.2f);
-                // FIXED STRINGS: Emojis stripped out to fix ?? rendering bugs
                 if (ImGui::Button("Stop Playtest and Reset Layout", ImVec2(320, 45))) {
-                    currentMode = EDIT_MODE; worldBlocks = backupWorldBlocks;
-                    marioTransform.x = backupPlayerX; marioTransform.y = backupPlayerY; marioTransform.z = backupPlayerZ;
-                    marioPhysics.velocityX = 0.0f; marioPhysics.velocityY = 0.0f; marioPhysics.velocityZ = 0.0f;
-                    playerHealth = playerMaxHealth;
-                    for (Entity e : enemyList) { ecs.getEnemyAI(e).isAlive = false; } enemyList.clear();
-                    for (const auto& sn : backupEnemyList) {
-                        Entity e = ecs.createEntity(); Transform& t = ecs.getTransform(e); EnemyAI& ai = ecs.getEnemyAI(e);
-                        t.x = sn.spawnX; t.z = sn.spawnZ; t.y = 0.5f; ai.isAlive = true; enemyList.push_back(e);
-                    }
+                    resetToEditorState();
                 }
                 ImGui::End();
             }
@@ -411,22 +449,30 @@ int main() {
                 }
                 ImGui::Dummy(ImVec2(0, 10));
 
+                float padding = ImGui::GetStyle().ItemSpacing.x;
+                float panelWidth = ImGui::GetContentRegionAvail().x;
+                float threeColumnWidth = (panelWidth - (2.0f * padding)) / 3.0f;
+                float twoColumnWidth   = (panelWidth - padding) / 2.0f;
+
                 ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Simulation Target Spawning"); ImGui::Separator();
-                if (ImGui::Button("Swarm x1", ImVec2(120, 32))) { eventQueue.push_back({ EVENT_SPAWN_ENEMY, ASSET_BLOCK, 0, 0, 0, 1 }); } ImGui::SameLine();
-                if (ImGui::Button("Swarm x10", ImVec2(130, 32))) { eventQueue.push_back({ EVENT_SPAWN_ENEMY, ASSET_BLOCK, 0, 0, 0, 10 }); } ImGui::SameLine();
-                if (ImGui::Button("Overload x1000", ImVec2(170, 32))) { eventQueue.push_back({ EVENT_SPAWN_ENEMY, ASSET_BLOCK, 0, 0, 0, 1000 }); }
+                if (ImGui::Button("Swarm x1", ImVec2(threeColumnWidth, 32))) { eventQueue.push_back({ EVENT_SPAWN_ENEMY, ASSET_BLOCK, 0, 0, 0, 1 }); } ImGui::SameLine();
+                if (ImGui::Button("Swarm x10", ImVec2(threeColumnWidth, 32))) { eventQueue.push_back({ EVENT_SPAWN_ENEMY, ASSET_BLOCK, 0, 0, 0, 10 }); } ImGui::SameLine();
+                if (ImGui::Button("Overload x1000", ImVec2(threeColumnWidth, 32))) { eventQueue.push_back({ EVENT_SPAWN_ENEMY, ASSET_BLOCK, 0, 0, 0, 1000 }); }
                 
                 float rad = marioTransform.rotationY * (3.14159265f / 180.0f);
                 float pX = marioTransform.x + sin(rad) * 4.0f; float pZ = marioTransform.z + cos(rad) * 4.0f;
 
                 ImGui::Dummy(ImVec2(0, 5)); ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Visual Palette Generation Toolbar"); ImGui::Separator();
-                if (ImGui::Button("Rock Block", ImVec2(140, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_ROCK, pX, 0.5f, pZ, 0 }); } ImGui::SameLine();
-                if (ImGui::Button("Small Hill", ImVec2(140, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_HILL, pX, 0.2f, pZ, 0 }); } ImGui::SameLine();
-                if (ImGui::Button("Wood Tree", ImVec2(140, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_TREE, pX, 0.0f, pZ, 0 }); }
-                if (ImGui::Button("Hazard Vine Trap", ImVec2(-1, 35))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_TRAP, pX, 0.0f, pZ, 0 }); }
+                if (ImGui::Button("Item Block", ImVec2(threeColumnWidth, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_BLOCK, pX, 1.5f, pZ, 0 }); } ImGui::SameLine();
+                if (ImGui::Button("Rock Block", ImVec2(threeColumnWidth, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_ROCK, pX, 0.5f, pZ, 0 }); } ImGui::SameLine();
+                if (ImGui::Button("Small Hill", ImVec2(threeColumnWidth, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_HILL, pX, 0.2f, pZ, 0 }); }
                 
-                if (ImGui::Button("Clear Placed Objects", ImVec2(215, 30))) { eventQueue.push_back({ EVENT_CLEAR_BLOCKS }); } ImGui::SameLine();
-                if (ImGui::Button("Purge All Enemies", ImVec2(220, 30))) { eventQueue.push_back({ EVENT_PURGE_ENEMIES }); }
+                if (ImGui::Button("Wood Tree", ImVec2(threeColumnWidth, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_TREE, pX, 0.0f, pZ, 0 }); } ImGui::SameLine();
+                if (ImGui::Button("Hazard Vine", ImVec2(threeColumnWidth, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_TRAP, pX, 0.0f, pZ, 0 }); } ImGui::SameLine();
+                if (ImGui::Button("Goal Pole", ImVec2(threeColumnWidth, 40))) { eventQueue.push_back({ EVENT_SPAWN_ASSET, ASSET_GOAL, pX, 0.0f, pZ, 0 }); }
+                
+                if (ImGui::Button("Clear Placed Objects", ImVec2(twoColumnWidth, 30))) { eventQueue.push_back({ EVENT_CLEAR_BLOCKS }); } ImGui::SameLine();
+                if (ImGui::Button("Purge All Enemies", ImVec2(twoColumnWidth, 30))) { eventQueue.push_back({ EVENT_PURGE_ENEMIES }); }
 
                 ImGui::Dummy(ImVec2(0, 10)); ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Player Health Sandbox Matrices"); ImGui::Separator();
                 ImGui::Checkbox("Player Invulnerability Toggle", &isPlayerInvulnerable);
@@ -472,7 +518,10 @@ int main() {
                     handleSpawnEnemy(ev.paramValue);
                     break;
                 case EVENT_SPAWN_ASSET:
-                    if (ev.assetType == ASSET_ROCK) {
+                    if (ev.assetType == ASSET_BLOCK) {
+                        // Spawns Item Box higher up (Y=1.5f) so you can jump underneath it
+                        worldBlocks.push_back({ ASSET_BLOCK, ev.paramX, ev.paramY, ev.paramZ, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, true });
+                    } else if (ev.assetType == ASSET_ROCK) {
                         worldBlocks.push_back({ ASSET_ROCK, ev.paramX, ev.paramY, ev.paramZ, 2.2f, 1.2f, 2.2f, 0.0f, 0.0f, 0.0f, true });
                     } else if (ev.assetType == ASSET_HILL) {
                         worldBlocks.push_back({ ASSET_HILL, ev.paramX, ev.paramY, ev.paramZ, 5.0f, 0.5f, 5.0f, 0.0f, 0.0f, 0.0f, true });
@@ -480,6 +529,13 @@ int main() {
                         worldBlocks.push_back({ ASSET_TREE, ev.paramX, ev.paramY, ev.paramZ, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, false });
                     } else if (ev.assetType == ASSET_TRAP) {
                         worldBlocks.push_back({ ASSET_TRAP, ev.paramX, ev.paramY, ev.paramZ, 2.5f, 0.1f, 2.5f, 0.0f, 0.0f, 0.0f, true });
+                    } else if (ev.assetType == ASSET_GOAL) {
+                        worldBlocks.push_back({ ASSET_GOAL, ev.paramX, ev.paramY, ev.paramZ, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, false });
+                    }
+                    break;
+                case EVENT_DESTROY_BLOCK:
+                    if (ev.targetBlockIndex >= 0 && ev.targetBlockIndex < worldBlocks.size()) {
+                        worldBlocks.erase(worldBlocks.begin() + ev.targetBlockIndex);
                     }
                     break;
                 case EVENT_CLEAR_BLOCKS:
