@@ -1,6 +1,10 @@
 #include "Engine/Window.h"
 #include "Engine/Core/ECS.h"
 #include "Engine/Core/SpatialGrid.h"
+#include "Engine/GameTypes.h"
+#include "Engine/PhysicsEngine.h"
+#include "Engine/RenderPipeline.h"
+#include "Engine/FileHandler.h"
 #include <GLFW/glfw3.h>
 #include <cmath>
 #include <vector>
@@ -9,244 +13,11 @@
 #include <string>
 #include <iostream>
 #include <algorithm>
-#include <fstream> 
 
 // --- IMGUI INCLUDES ---
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_glfw.h"
 #include "imgui/imgui_impl_opengl3.h"
-
-enum GameState { MAIN_MENU, PLAYING, PAUSED, STAGE_COMPLETED };
-enum MenuSubState { SUB_MAIN, SUB_LOAD_SELECT }; 
-enum SaveSubState { SAVE_INACTIVE, SAVE_SLOT_SELECT, SAVE_OVERWRITE_CONFIRM, SAVE_DELETE_CONFIRM };
-enum EngineMode { EDIT_MODE, PLAY_MODE };
-
-enum AssetType { ASSET_BLOCK, ASSET_ROCK, ASSET_HILL, ASSET_TREE, ASSET_TRAP, ASSET_GOAL };
-
-struct EnvironmentBlock {
-    AssetType type;
-    float x, y, z;
-    float scaleX, scaleY, scaleZ;
-    float r, g, b;
-    bool climbable; 
-};
-
-struct EnemySnapshot {
-    float spawnX, spawnZ;
-};
-
-// --- DYNAMIC PROJECTILE PHYSICAL PRIMITIVE ---
-struct Projectile {
-    float x, y, z;
-    float dirX, dirZ;
-    float speed;
-    float lifetime;
-    bool isAlive;
-};
-
-enum EventType { EVENT_SPAWN_ENEMY, EVENT_SPAWN_ASSET, EVENT_CLEAR_BLOCKS, EVENT_PURGE_ENEMIES, EVENT_PLAYER_DAMAGE, EVENT_DESTROY_BLOCK };
-
-struct EngineEvent {
-    EventType type;
-    AssetType assetType;
-    float paramX = 0.0f;
-    float paramY = 0.0f;
-    float paramZ = 0.0f;
-    int paramValue = 0;
-    int targetBlockIndex = -1; 
-};
-
-// --- HIGH PERFORMANCE PROCEDURAL NOISE SYSTEM ---
-float GetProceduralNoise(float x, float z, float frequency) {
-    float n = sin(x * frequency) * cos(z * frequency) + sin(x * frequency * 2.5f) * sin(z * frequency * 1.8f);
-    return (n + 2.0f) / 4.0f; 
-}
-
-// --- DYNAMIC TEXTURE PRIMITIVE DRAWERS ---
-void DrawProceduralCube(float baseR, float baseG, float baseB, float noiseFreq, bool isGrassTop = false) {
-    glBegin(GL_QUADS);
-    
-    // TOP FACE
-    glNormal3f(0.0f, 1.0f, 0.0f);
-    float r = baseR; float g = baseG; float b = baseB;
-    if (isGrassTop) { r = 0.12f; g = 0.52f; b = 0.18f; } 
-    glColor3f(r * 0.9f, g * 0.9f, b * 0.9f);
-    glVertex3f(-0.5f,  0.5f,  0.5f); glVertex3f( 0.5f,  0.5f,  0.5f); glVertex3f( 0.5f,  0.5f, -0.5f); glVertex3f(-0.5f,  0.5f, -0.5f);
-    
-    // FRONT FACE
-    glNormal3f(0.0f, 0.0f, 1.0f); glColor3f(baseR, baseG, baseB);
-    glVertex3f(-0.5f, -0.5f,  0.5f); glVertex3f( 0.5f, -0.5f,  0.5f); glVertex3f( 0.5f,  0.5f,  0.5f); glVertex3f(-0.5f,  0.5f,  0.5f);
-    
-    // BACK FACE
-    glNormal3f(0.0f, 0.0f, -1.0f); glColor3f(baseR * 0.85f, baseG * 0.85f, baseB * 0.85f);
-    glVertex3f( 0.5f, -0.5f, -0.5f); glVertex3f(-0.5f, -0.5f, -0.5f); glVertex3f(-0.5f,  0.5f, -0.5f); glVertex3f( 0.5f,  0.5f, -0.5f);
-    
-    // LEFT FACE
-    glNormal3f(-1.0f, 0.0f, 0.0f); glColor3f(baseR * 0.75f, baseG * 0.75f, baseB * 0.75f);
-    glVertex3f(-0.5f, -0.5f, -0.5f); glVertex3f(-0.5f, -0.5f,  0.5f); glVertex3f(-0.5f,  0.5f,  0.5f); glVertex3f(-0.5f,  0.5f, -0.5f);
-    
-    // RIGHT FACE
-    glNormal3f(1.0f, 0.0f, 0.0f); glColor3f(baseR * 0.8f, baseG * 0.8f, baseB * 0.8f);
-    glVertex3f( 0.5f, -0.5f,  0.5f); glVertex3f( 0.5f, -0.5f, -0.5f); glVertex3f( 0.5f,  0.5f, -0.5f); glVertex3f( 0.5f,  0.5f,  0.5f);
-    
-    // BOTTOM FACE
-    glNormal3f(0.0f, -1.0f, 0.0f); glColor3f(baseR * 0.6f, baseG * 0.6f, baseB * 0.6f);
-    glVertex3f(-0.5f, -0.5f, -0.5f); glVertex3f( 0.5f, -0.5f, -0.5f); glVertex3f( 0.5f, -0.5f,  0.5f); glVertex3f(-0.5f, -0.5f,  0.5f);
-    glEnd();
-}
-
-void DrawPlayer(float r, float g, float b, int gunLevel, bool gunEnabled) {
-    glPushMatrix(); glTranslatef(0.0f, 0.1f, 0.0f); glScalef(0.7f, 0.9f, 0.7f); DrawProceduralCube(r, g, b, 0.0f); glPopMatrix();
-    glPushMatrix(); glTranslatef(0.0f, 0.25f, 0.35f); glScalef(0.5f, 0.3f, 0.1f); DrawProceduralCube(0.9f, 0.9f, 1.0f, 0.0f); glPopMatrix();
-    glPushMatrix(); glTranslatef(-0.15f, -0.35f, 0.0f); glScalef(0.25f, 0.3f, 0.25f); DrawProceduralCube(r, g, b, 0.0f); glPopMatrix();
-    glPushMatrix(); glTranslatef(0.15f, -0.35f, 0.0f); glScalef(0.25f, 0.3f, 0.25f); DrawProceduralCube(r, g, b, 0.0f); glPopMatrix();
-    glPushMatrix(); glTranslatef(0.0f, 0.55f, 0.0f); glScalef(0.75f, 0.05f, 0.75f); DrawProceduralCube(r*1.1f, g, b, 0.0f); glPopMatrix();
-    glPushMatrix(); glTranslatef(0.0f, 0.6f, 0.0f); glScalef(0.6f, 0.1f, 0.6f); DrawProceduralCube(1.0f, 1.0f, 1.0f, 0.0f); glPopMatrix();
-
-    if (gunEnabled) {
-        for (int i = 0; i < gunLevel; ++i) {
-            glPushMatrix();
-            float sideOffset = (i % 2 == 0) ? 0.45f : -0.45f;
-            float heightRow = (i / 2) * 0.25f;
-            glTranslatef(sideOffset, -0.1f + heightRow, 0.1f);
-            glScalef(0.18f, 0.18f, 0.4f);
-            DrawProceduralCube(1.0f, 0.85f, 0.0f, 0.0f); 
-            glPopMatrix();
-        }
-    }
-}
-
-void DrawEnemy(float r, float g, float b) {
-    glPushMatrix(); glTranslatef(0.0f, 0.0f, 0.0f); glScalef(0.8f, 0.6f, 0.8f); DrawProceduralCube(r*0.6f, g*0.6f, b*0.6f, 0.0f); glPopMatrix();
-    glPushMatrix(); glTranslatef(0.0f, 0.4f, 0.0f); glScalef(0.9f, 0.3f, 0.9f); DrawProceduralCube(r, g, b, 0.0f); glPopMatrix();
-}
-
-void DrawPlatform() {
-    float size = 2.0f; glBegin(GL_QUADS); glNormal3f(0.0f, 1.0f, 0.0f);
-    for (float x = -100.0f; x < 100.0f; x += size) {
-        for (float z = -100.0f; z < 100.0f; z += size) {
-            float noise = GetProceduralNoise(x, z, 0.35f);
-            float r = 0.10f + (noise * 0.06f); float g = 0.48f + (noise * 0.12f); float b = 0.16f + (noise * 0.04f);
-            glColor3f(r, g, b);
-            glVertex3f(x, 0.0f, z); glVertex3f(x + size, 0.0f, z); glVertex3f(x + size, 0.0f, z + size); glVertex3f(x, 0.0f, z + size);
-        }
-    }
-    glEnd();
-}
-
-void DrawTrapPrimitive(float sx, float sz) {
-    for (float dx = -sx * 0.4f; dx <= sx * 0.4f; dx += 0.4f) {
-        for (float dz = -sz * 0.4f; dz <= sz * 0.4f; dz += 0.4f) {
-            glPushMatrix(); glTranslatef(dx, 0.15f, dz); glScalef(0.12f, 0.35f, 0.12f); DrawProceduralCube(0.28f, 0.32f, 0.15f, 0.0f); glPopMatrix();
-        }
-    }
-}
-
-void DrawFlatBoxShadow(float hX, float hZ) {
-    glDisable(GL_LIGHTING); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
-    glColor4f(0.15f, 0.15f, 0.15f, 0.75f); 
-    glBegin(GL_QUADS);
-    glVertex3f(-hX * 0.5f, 0.01f,  hZ * 0.5f);
-    glVertex3f( hX * 0.5f, 0.01f,  hZ * 0.5f);
-    glVertex3f( hX * 0.5f, 0.01f, -hZ * 0.5f);
-    glVertex3f(-hX * 0.5f, 0.01f, -hZ * 0.5f);
-    glEnd();
-    glDepthMask(GL_TRUE); glDisable(GL_BLEND); glEnable(GL_LIGHTING);
-}
-
-void DrawCustomAsset(const EnvironmentBlock& block) {
-    if (block.type == ASSET_BLOCK) {
-        glPushMatrix(); glTranslatef(block.x, block.y, block.z); glScalef(block.scaleX, block.scaleY, block.scaleZ);
-        DrawProceduralCube(0.88f, 0.55f, 0.12f, 0.0f);
-        glPopMatrix();
-
-        glPushMatrix(); glDisable(GL_LIGHTING); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
-        glColor4f(0.15f, 0.15f, 0.15f, 0.75f);
-        glTranslatef(block.x, 0.01f, block.z); 
-        glScalef(block.scaleX * 0.95f, 0.01f, block.scaleZ * 0.95f);
-        DrawProceduralCube(0.15f, 0.15f, 0.15f, 0.0f);
-        glDepthMask(GL_TRUE); glDisable(GL_BLEND); glEnable(GL_LIGHTING); glPopMatrix();
-    }
-    else if (block.type == ASSET_ROCK) {
-        glPushMatrix(); glTranslatef(block.x, block.y, block.z); glScalef(block.scaleX, block.scaleY, block.scaleZ); DrawProceduralCube(0.42f, 0.44f, 0.46f, 1.2f); glPopMatrix();
-    } 
-    else if (block.type == ASSET_HILL) {
-        for (int i = 0; i < 3; ++i) {
-            glPushMatrix();
-            float stepY = block.y + (i * 0.4f); float stepScaleX = block.scaleX - (i * 1.0f); float stepScaleZ = block.scaleZ - (i * 1.0f);
-            glTranslatef(block.x, stepY, block.z); glScalef(stepScaleX, 0.4f, stepScaleZ);
-            bool isTopGrass = (i == 2);
-            DrawProceduralCube(0.36f, 0.24f, 0.14f, 2.5f, isTopGrass); 
-            glPopMatrix();
-        }
-    } 
-    else if (block.type == ASSET_TREE) {
-        glPushMatrix(); glTranslatef(block.x, block.y + 0.75f, block.z); glScalef(0.4f, 1.5f, 0.4f); DrawProceduralCube(0.32f, 0.20f, 0.08f, 0.0f); glPopMatrix();
-        glPushMatrix(); glTranslatef(block.x, block.y + 2.0f, block.z); glScalef(1.6f, 1.0f, 1.6f); DrawProceduralCube(0.08f, 0.45f, 0.12f, 3.0f); glPopMatrix();
-    }
-    else if (block.type == ASSET_TRAP) {
-        glPushMatrix(); glTranslatef(block.x, block.y, block.z); DrawTrapPrimitive(2.5f, 2.5f); glPopMatrix();
-    }
-    else if (block.type == ASSET_GOAL) {
-        glPushMatrix(); glTranslatef(block.x, block.y + 2.0f, block.z); glScalef(0.15f, 4.0f, 0.15f); DrawProceduralCube(0.85f, 0.65f, 0.15f, 0.0f); glPopMatrix();
-        glPushMatrix(); glTranslatef(block.x + 0.45f, block.y + 3.6f, block.z); glScalef(0.8f, 0.5f, 0.1f); DrawProceduralCube(0.9f, 0.9f, 0.9f, 0.0f); glPopMatrix();
-    }
-}
-
-void DrawShadow(float radius) {
-    glDisable(GL_LIGHTING); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE); glColor4f(0.0f, 0.0f, 0.0f, 0.4f); 
-    glBegin(GL_QUADS); glVertex3f(-radius, 0.02f, radius); glVertex3f(radius, 0.02f, radius); glVertex3f(radius, 0.02f, -radius); glVertex3f(-radius, 0.02f, -radius); glEnd();
-    glDepthMask(GL_TRUE); glDisable(GL_BLEND); glEnable(GL_LIGHTING);
-}
-
-void Resolve3DCollision(float& posX, float& posY, float& posZ, float& velY, bool& grounded, const EnvironmentBlock& block, float extX, float extY, float extZ, int blockIdx, std::vector<EngineEvent>& eventQueue, EngineMode currentMode, int initiator) {
-    if (block.type == ASSET_GOAL) return; 
-    int iterations = (block.type == ASSET_HILL) ? 3 : 1;
-
-    for (int i = 0; i < iterations; ++i) {
-        float bScaleX = block.scaleX; float bScaleY = block.scaleY; float bScaleZ = block.scaleZ; float bX = block.x; float bY = block.y; float bZ = block.z;
-
-        if (block.type == ASSET_HILL) {
-            bY = block.y + (i * 0.4f); bScaleX = block.scaleX - (i * 1.0f); bScaleZ = block.scaleZ - (i * 1.0f); bScaleY = 0.4f;
-        } else if (block.type == ASSET_TREE) { bScaleY = 2.5f; }
-
-        float blockMinX = bX - (bScaleX * 0.5f); float blockMaxX = bX + (bScaleX * 0.5f);
-        float blockMinZ = bZ - (bScaleZ * 0.5f); float blockMaxZ = bZ + (bScaleZ * 0.5f);
-        float blockMaxY = (block.type == ASSET_HILL) ? bY + 0.2f : bY + (bScaleY * 0.5f);
-        float blockMinY = bY - (bScaleY * 0.5f);
-
-        float entMinX = posX - extX; float entMaxX = posX + extX; float entMinZ = posZ - extZ; float entMaxZ = posZ + extZ; float entMinY = posY - extY; float entMaxY = posY + extY;
-
-        if (entMaxX > blockMinX && entMinX < blockMaxX && entMaxZ > blockMinZ && entMinZ < blockMaxZ && entMaxY > blockMinY && entMinY < blockMaxY) {
-            float overlapX = (posX > bX) ? (blockMaxX - entMinX) : (entMaxX - blockMinX);
-            float overlapZ = (posZ > bZ) ? (blockMaxZ - entMinZ) : (entMaxZ - blockMinZ);
-            float overlapY = blockMaxY - entMinY;
-
-            float bottomCeilingDiff = std::abs(entMaxY - blockMinY);
-            if (block.type == ASSET_BLOCK && bottomCeilingDiff < 0.25f && velY > 0.0f && currentMode == PLAY_MODE) {
-                velY = -2.0f; 
-                eventQueue.push_back({ EVENT_DESTROY_BLOCK, ASSET_BLOCK, 0, 0, 0, initiator, blockIdx });
-                return;
-            }
-
-            float stepDiff = blockMaxY - (posY - extY);
-            if (block.climbable && stepDiff > 0.0f && stepDiff <= 0.45f) {
-                posY = blockMaxY + extY; velY = 0.0f; grounded = true;
-            } 
-            else if (overlapY < overlapX && overlapY < overlapZ && velY <= 0.0f && block.climbable) {
-                posY = blockMaxY + extY; velY = 0.0f; grounded = true;
-            } else {
-                if (overlapX < overlapZ) posX += (posX > bX) ? overlapX : -overlapX;
-                else posZ += (posZ > bZ) ? overlapZ : -overlapZ;
-            }
-        }
-    }
-}
-
-bool CheckFileExists(const std::string& fileName) {
-    std::ifstream f(fileName.c_str());
-    return f.good();
-}
 
 int main() {
     srand(static_cast<unsigned int>(time(0))); 
@@ -362,68 +133,16 @@ int main() {
         luigiHasGun = false; luigiShootingCooldown = 0.0f; luigiIsHelping = false; luigiMessageTimer = 0.0f;
     };
 
-    auto executeSaveOperation = [&](int slotNumber) {
-        std::string pathName = "slot" + std::to_string(slotNumber) + ".env";
-        std::ofstream out(pathName);
-        if (!out.is_open()) return;
-
-        out << playerMovementSpeed << " " << luigiMovementSpeed << " " << globalEnemySpeed << " "
-            << playerMaxHealth << " " << isGunEnabled << " " << playerGunLevel << "\n";
-
-        int liveEnemiesCount = 0;
-        for (Entity e : enemyList) { if (ecs.getEnemyAI(e).isAlive) liveEnemiesCount++; }
-        out << liveEnemiesCount << "\n";
-        for (Entity e : enemyList) {
-            if (ecs.getEnemyAI(e).isAlive) {
-                out << ecs.getTransform(e).x << " " << ecs.getTransform(e).z << "\n";
-            }
-        }
-
-        out << worldBlocks.size() << "\n";
-        for (const auto& block : worldBlocks) {
-            out << static_cast<int>(block.type) << " " << block.x << " " << block.y << " " << block.z << " "
-                << block.scaleX << " " << block.scaleY << " " << block.scaleZ << " "
-                << block.r << " " << block.g << " " << block.b << " " << block.climbable << "\n";
-        }
-        out.close();
-    };
-
-    auto executeLoadOperation = [&](int slotNumber) {
-        std::string pathName = "slot" + std::to_string(slotNumber) + ".env";
-        std::ifstream in(pathName);
-        if (!in.is_open()) return;
-
-        enterSandboxEnvironment(); 
-
-        in >> playerMovementSpeed >> luigiMovementSpeed >> globalEnemySpeed >> playerMaxHealth >> isGunEnabled >> playerGunLevel;
+    auto triggerLoadProcess = [&](int slot) {
+        executeLoadOperation(slot, playerMovementSpeed, luigiMovementSpeed, globalEnemySpeed, playerMaxHealth, isGunEnabled, playerGunLevel, enemyList, ecs, worldBlocks);
         playerHealth = playerMaxHealth;
-
-        int enemyLoadCount = 0; in >> enemyLoadCount;
-        for (int i = 0; i < enemyLoadCount; ++i) {
-            float ex = 0, ez = 0; in >> ex >> ez;
-            Entity e = ecs.createEntity(); Transform& t = ecs.getTransform(e); EnemyAI& ai = ecs.getEnemyAI(e);
-            t.x = ex; t.y = 0.5f; t.z = ez; ai.spawnX = ex; ai.spawnZ = ez; ai.isAlive = true;
-            enemyList.push_back(e);
-        }
-
-        size_t blockLoadCount = 0; in >> blockLoadCount;
-        for (size_t i = 0; i < blockLoadCount; ++i) {
-            int rawType = 0; EnvironmentBlock block;
-            in >> rawType >> block.x >> block.y >> block.z >> block.scaleX >> block.scaleY >> block.scaleZ >> block.r >> block.g >> block.b >> block.climbable;
-            block.type = static_cast<AssetType>(rawType);
-            worldBlocks.push_back(block);
-        }
-        in.close();
-
         backupWorldBlocks = worldBlocks;
         backupPlayerX = 0.0f; backupPlayerY = 0.5f; backupPlayerZ = 0.0f;
         backupLuigiX = 2.0f; backupLuigiY = 0.5f; backupLuigiZ = 0.0f;
-        
         backupEnemyList.clear();
         for (Entity e : enemyList) {
             if (ecs.getEnemyAI(e).isAlive) backupEnemyList.push_back({ ecs.getTransform(e).x, ecs.getTransform(e).z });
         }
-
         currentState = PLAYING; currentMode = EDIT_MODE;
     };
 
@@ -522,12 +241,10 @@ int main() {
                     if (activeGoalConfirmed && luigiIsHelping) {
                         float deltaX = targetLocationX - luigiTransform.x; float deltaZ = targetLocationZ - luigiTransform.z;
                         if (minimumTrackingRange > 0.1f) {
-                            // Apply an air control speed restriction layout parameter
                             float speedModifier = luigiPhysics.isGrounded ? 1.0f : 0.35f;
                             luigiPhysics.velocityX = (deltaX / minimumTrackingRange) * luigiMovementSpeed * speedModifier;
                             luigiPhysics.velocityZ = (deltaZ / minimumTrackingRange) * luigiMovementSpeed * speedModifier;
 
-                            // Prevent rapid rotation snapping within proximal distance thresholds
                             if (minimumTrackingRange > 0.75f) {
                                 luigiTransform.rotationY = atan2(deltaX, deltaZ) * (180.0f / 3.14159265f);
                             }
@@ -771,7 +488,7 @@ int main() {
                         label += exists ? " (saved)" : " (empty)";
                         
                         if (ImGui::Button(label.c_str(), ImVec2(340, 50))) {
-                            if (exists) { executeLoadOperation(slot); }
+                            if (exists) { triggerLoadProcess(slot); }
                         }
                         if (exists) {
                             ImGui::SameLine();
@@ -852,7 +569,7 @@ int main() {
                             if (CheckFileExists("slot" + std::to_string(slot) + ".env")) {
                                 currentSaveSubState = SAVE_OVERWRITE_CONFIRM;
                             } else {
-                                executeSaveOperation(slot); currentSaveSubState = SAVE_INACTIVE;
+                                executeSaveOperation(slot, playerMovementSpeed, luigiMovementSpeed, globalEnemySpeed, playerMaxHealth, isGunEnabled, playerGunLevel, enemyList, ecs, worldBlocks); currentSaveSubState = SAVE_INACTIVE;
                             }
                         }
                     }
@@ -863,7 +580,7 @@ int main() {
                     ImGui::Indent();
                     ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "Environment %d contains saved configs.\nProceed to overwrite?", pendingActiveTargetSlot);
                     if (ImGui::Button("Yes, Overwrite", ImVec2(180, 30))) {
-                        executeSaveOperation(pendingActiveTargetSlot); currentSaveSubState = SAVE_INACTIVE;
+                        executeSaveOperation(pendingActiveTargetSlot, playerMovementSpeed, luigiMovementSpeed, globalEnemySpeed, playerMaxHealth, isGunEnabled, playerGunLevel, enemyList, ecs, worldBlocks); currentSaveSubState = SAVE_INACTIVE;
                     } ImGui::SameLine();
                     if (ImGui::Button("No, Cancel", ImVec2(180, 30))) { currentSaveSubState = SAVE_INACTIVE; }
                     ImGui::Unindent(); ImGui::Separator();
@@ -943,7 +660,7 @@ int main() {
                 ImGui::SetWindowFontScale(1.8f); ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Max weapon amount reached"); ImGui::End();
             }
 
-            // --- ALLY RENDERING TRACK ---
+            // --- ALLY ALERT RENDERING TRACK ---
             if (luigiMessageTimer > 0.0f && currentMode == PLAY_MODE) {
                 ImGui::SetNextWindowPos(ImVec2(1440.0f / 2.0f, 900.0f - 160.0f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
                 ImGui::Begin("LuigiAlertOverlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);

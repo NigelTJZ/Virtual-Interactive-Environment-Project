@@ -33,7 +33,10 @@ include_directories(include include/imgui)
 add_executable(VIE-Project 
     src/main.cpp 
     src/Engine/Window.cpp
-    src/Engine/SpatialGrid.cpp  # <-- NEW: Added to compilation
+    src/Engine/SpatialGrid.cpp
+    src/Engine/FileHandler.cpp
+    src/Engine/PhysicsEngine.cpp
+    src/Engine/RenderPipeline.cpp
     include/imgui/imgui.cpp
     include/imgui/imgui_draw.cpp
     include/imgui/imgui_tables.cpp
