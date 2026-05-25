@@ -37,6 +37,8 @@ add_executable(VIE-Project
     src/Engine/FileHandler.cpp
     src/Engine/PhysicsEngine.cpp
     src/Engine/RenderPipeline.cpp
+    src/Engine/BehaviorSystem.cpp
+    src/Engine/EventSystem.cpp
     include/imgui/imgui.cpp
     include/imgui/imgui_draw.cpp
     include/imgui/imgui_tables.cpp
