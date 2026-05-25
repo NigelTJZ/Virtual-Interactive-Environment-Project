@@ -9,7 +9,7 @@
 #include <string>
 #include <iostream>
 #include <algorithm>
-#include <fstream> // Required for Phase 4 File Configuration streams
+#include <fstream> 
 
 // --- IMGUI INCLUDES ---
 #include "imgui/imgui.h"
@@ -18,7 +18,7 @@
 
 enum GameState { MAIN_MENU, PLAYING, PAUSED, STAGE_COMPLETED };
 enum MenuSubState { SUB_MAIN, SUB_LOAD_SELECT }; 
-enum SaveSubState { SAVE_INACTIVE, SAVE_SLOT_SELECT, SAVE_OVERWRITE_CONFIRM };
+enum SaveSubState { SAVE_INACTIVE, SAVE_SLOT_SELECT, SAVE_OVERWRITE_CONFIRM, SAVE_DELETE_CONFIRM };
 enum EngineMode { EDIT_MODE, PLAY_MODE };
 
 enum AssetType { ASSET_BLOCK, ASSET_ROCK, ASSET_HILL, ASSET_TREE, ASSET_TRAP, ASSET_GOAL };
@@ -35,6 +35,7 @@ struct EnemySnapshot {
     float spawnX, spawnZ;
 };
 
+// --- DYNAMIC PROJECTILE PHYSICAL PRIMITIVE ---
 struct Projectile {
     float x, y, z;
     float dirX, dirZ;
@@ -242,7 +243,6 @@ void Resolve3DCollision(float& posX, float& posY, float& posZ, float& velY, bool
     }
 }
 
-// Helper utility to verify if a file profile exists on hard disk space natively
 bool CheckFileExists(const std::string& fileName) {
     std::ifstream f(fileName.c_str());
     return f.good();
@@ -362,17 +362,14 @@ int main() {
         luigiHasGun = false; luigiShootingCooldown = 0.0f; luigiIsHelping = false; luigiMessageTimer = 0.0f;
     };
 
-    // --- PHASE 4 SERIALIZATION SAVE & LOAD UTILITIES ---
     auto executeSaveOperation = [&](int slotNumber) {
         std::string pathName = "slot" + std::to_string(slotNumber) + ".env";
         std::ofstream out(pathName);
         if (!out.is_open()) return;
 
-        // 1. Serialize Configuration Scalars
         out << playerMovementSpeed << " " << luigiMovementSpeed << " " << globalEnemySpeed << " "
             << playerMaxHealth << " " << isGunEnabled << " " << playerGunLevel << "\n";
 
-        // 2. Serialize Enemy Configuration Data Tracks
         int liveEnemiesCount = 0;
         for (Entity e : enemyList) { if (ecs.getEnemyAI(e).isAlive) liveEnemiesCount++; }
         out << liveEnemiesCount << "\n";
@@ -382,7 +379,6 @@ int main() {
             }
         }
 
-        // 3. Serialize Static Asset Bounding Blocks
         out << worldBlocks.size() << "\n";
         for (const auto& block : worldBlocks) {
             out << static_cast<int>(block.type) << " " << block.x << " " << block.y << " " << block.z << " "
@@ -397,13 +393,11 @@ int main() {
         std::ifstream in(pathName);
         if (!in.is_open()) return;
 
-        enterSandboxEnvironment(); // Complete system canvas table flush
+        enterSandboxEnvironment(); 
 
-        // 1. Parse configuration sliders
         in >> playerMovementSpeed >> luigiMovementSpeed >> globalEnemySpeed >> playerMaxHealth >> isGunEnabled >> playerGunLevel;
         playerHealth = playerMaxHealth;
 
-        // 2. Reconstruct Enemy Array Identifiers
         int enemyLoadCount = 0; in >> enemyLoadCount;
         for (int i = 0; i < enemyLoadCount; ++i) {
             float ex = 0, ez = 0; in >> ex >> ez;
@@ -412,7 +406,6 @@ int main() {
             enemyList.push_back(e);
         }
 
-        // 3. Reconstruct Asset Structure Matrices
         size_t blockLoadCount = 0; in >> blockLoadCount;
         for (size_t i = 0; i < blockLoadCount; ++i) {
             int rawType = 0; EnvironmentBlock block;
@@ -422,7 +415,6 @@ int main() {
         }
         in.close();
 
-        // Establish structural snapshot memory pads cleanly on configuration fetch
         backupWorldBlocks = worldBlocks;
         backupPlayerX = 0.0f; backupPlayerY = 0.5f; backupPlayerZ = 0.0f;
         backupLuigiX = 2.0f; backupLuigiY = 0.5f; backupLuigiZ = 0.0f;
@@ -530,9 +522,15 @@ int main() {
                     if (activeGoalConfirmed && luigiIsHelping) {
                         float deltaX = targetLocationX - luigiTransform.x; float deltaZ = targetLocationZ - luigiTransform.z;
                         if (minimumTrackingRange > 0.1f) {
-                            luigiPhysics.velocityX = (deltaX / minimumTrackingRange) * luigiMovementSpeed;
-                            luigiPhysics.velocityZ = (deltaZ / minimumTrackingRange) * luigiMovementSpeed;
-                            luigiTransform.rotationY = atan2(deltaX, deltaZ) * (180.0f / 3.14159265f);
+                            // Apply an air control speed restriction layout parameter
+                            float speedModifier = luigiPhysics.isGrounded ? 1.0f : 0.35f;
+                            luigiPhysics.velocityX = (deltaX / minimumTrackingRange) * luigiMovementSpeed * speedModifier;
+                            luigiPhysics.velocityZ = (deltaZ / minimumTrackingRange) * luigiMovementSpeed * speedModifier;
+
+                            // Prevent rapid rotation snapping within proximal distance thresholds
+                            if (minimumTrackingRange > 0.75f) {
+                                luigiTransform.rotationY = atan2(deltaX, deltaZ) * (180.0f / 3.14159265f);
+                            }
 
                             if (selectedEnemyTarget == -1 && minimumTrackingRange < 1.5f) {
                                 float slowdownFactor = minimumTrackingRange / 1.5f;
@@ -732,36 +730,61 @@ int main() {
             }
         }
 
-        // --- IMGUI ENVIRONMENTAL INTERFACE COMPONENT LAYER ---
+        // --- IMGUI ENVIRONMENTAL EDITOR PANEL ---
         if (currentState == MAIN_MENU) {
             ImGui::SetNextWindowPos(ImVec2(1440.0f / 2.0f, 900.0f / 2.0f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
             ImGui::Begin("Main Menu Container", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
             
             if (currentMenuSubState == SUB_MAIN) {
+                ImGui::SetNextWindowPos(ImVec2(1440.0f / 2.0f, 900.0f / 2.0f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
                 ImGui::SetWindowFontScale(2.5f); ImGui::Text("VIRTUAL ENVIRONMENT MAKER"); ImGui::SetWindowFontScale(1.5f);
                 ImGui::Dummy(ImVec2(0.0f, 20.0f)); 
                 
                 if (ImGui::Button("New Environment", ImVec2(450, 60))) { enterSandboxEnvironment(); } ImGui::Dummy(ImVec2(0.0f, 5.0f)); 
-                if (ImGui::Button("Load Environment", ImVec2(450, 60))) { currentMenuSubState = SUB_LOAD_SELECT; } ImGui::Dummy(ImVec2(0.0f, 5.0f)); 
+                if (ImGui::Button("Load Environment", ImVec2(450, 60))) { currentMenuSubState = SUB_LOAD_SELECT; currentSaveSubState = SAVE_INACTIVE; } ImGui::Dummy(ImVec2(0.0f, 5.0f)); 
                 if (ImGui::Button("Quit to Desktop", ImVec2(450, 60))) { glfwSetWindowShouldClose(myWindow.getRawWindow(), true); }
             } 
             else if (currentMenuSubState == SUB_LOAD_SELECT) {
-                ImGui::SetWindowFontScale(2.0f); ImGui::Text("Select Environment Configuration to Load"); ImGui::SetWindowFontScale(1.2f);
-                ImGui::Dummy(ImVec2(0.0f, 15.0f));
-
-                for (int slot = 1; slot <= 3; ++slot) {
-                    std::string label = "Slot " + std::to_string(slot) + ": Environment " + std::to_string(slot);
-                    label += CheckFileExists("slot" + std::to_string(slot) + ".env") ? " (saved)" : " (empty)";
+                if (currentSaveSubState == SAVE_DELETE_CONFIRM) {
+                    ImGui::SetWindowFontScale(2.0f); ImGui::Text("Confirm Layout File Deletion"); ImGui::SetWindowFontScale(1.2f);
+                    ImGui::Dummy(ImVec2(0.0f, 15.0f));
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Environment %d configuration will be permanently unlinked from disk.\nProceed?", pendingActiveTargetSlot);
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
                     
-                    if (ImGui::Button(label.c_str(), ImVec2(450, 50))) {
-                        if (CheckFileExists("slot" + std::to_string(slot) + ".env")) {
-                            executeLoadOperation(slot);
-                        }
+                    if (ImGui::Button("Yes, Delete File", ImVec2(210, 45))) {
+                        std::string pathName = "slot" + std::to_string(pendingActiveTargetSlot) + ".env";
+                        std::remove(pathName.c_str()); 
+                        currentSaveSubState = SAVE_INACTIVE;
                     }
-                    ImGui::Dummy(ImVec2(0.0f, 5.0f));
+                    ImGui::SameLine();
+                    if (ImGui::Button("No, Cancel", ImVec2(210, 45))) {
+                        currentSaveSubState = SAVE_INACTIVE;
+                    }
                 }
-                ImGui::Dummy(ImVec2(0.0f, 15.0f));
-                if (ImGui::Button("<- Return to Main Menu", ImVec2(240, 40))) { currentMenuSubState = SUB_MAIN; }
+                else {
+                    ImGui::SetWindowFontScale(2.0f); ImGui::Text("Select Environment Configuration to Load"); ImGui::SetWindowFontScale(1.2f);
+                    ImGui::Dummy(ImVec2(0.0f, 15.0f));
+
+                    for (int slot = 1; slot <= 3; ++slot) {
+                        std::string label = "Slot " + std::to_string(slot) + ": Environment " + std::to_string(slot);
+                        bool exists = CheckFileExists("slot" + std::to_string(slot) + ".env");
+                        label += exists ? " (saved)" : " (empty)";
+                        
+                        if (ImGui::Button(label.c_str(), ImVec2(340, 50))) {
+                            if (exists) { executeLoadOperation(slot); }
+                        }
+                        if (exists) {
+                            ImGui::SameLine();
+                            if (ImGui::Button(("Delete##" + std::to_string(slot)).c_str(), ImVec2(100, 50))) {
+                                pendingActiveTargetSlot = slot;
+                                currentSaveSubState = SAVE_DELETE_CONFIRM;
+                            }
+                        }
+                        ImGui::Dummy(ImVec2(0.0f, 5.0f));
+                    }
+                    ImGui::Dummy(ImVec2(0.0f, 15.0f));
+                    if (ImGui::Button("<- Return to Main Menu", ImVec2(240, 40))) { currentMenuSubState = SUB_MAIN; }
+                }
             }
             ImGui::End();
         }
@@ -815,7 +838,6 @@ int main() {
                 }
                 ImGui::Dummy(ImVec2(0, 5));
 
-                // --- INTEGRATED SERIALIZATION SAVE SUB-PANEL SYSTEM ---
                 if (ImGui::Button("Export Environment Configuration File", ImVec2(-1, 35))) {
                     currentSaveSubState = SAVE_SLOT_SELECT;
                 }
@@ -921,10 +943,13 @@ int main() {
                 ImGui::SetWindowFontScale(1.8f); ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Max weapon amount reached"); ImGui::End();
             }
 
+            // --- ALLY RENDERING TRACK ---
             if (luigiMessageTimer > 0.0f && currentMode == PLAY_MODE) {
                 ImGui::SetNextWindowPos(ImVec2(1440.0f / 2.0f, 900.0f - 160.0f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
                 ImGui::Begin("LuigiAlertOverlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
-                ImGui::SetWindowFontScale(1.8f); ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "%s", luigiMessage.c_str()); ImGui::End();
+                ImGui::SetWindowFontScale(1.8f); 
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", luigiMessage.c_str()); 
+                ImGui::End();
             }
         }
 
